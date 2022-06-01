@@ -83,15 +83,19 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 //这里两个井号的意思是拼接,这个内联函数的作用是给指针赋上对应SDS结构体的地址
 //还是得感叹一下C语言真好用,能够直接拼接类型信息,s是指向柔性数组的指针,然后减去结构体的大小,就是结构体头部的位置了
 #define SDS_HDR_VAR(T,s) struct sdshdr##T *sh = (void*)((s)-(sizeof(struct sdshdr##T)));
+//写法类似SDS_HDR_VAR,也是获取结构体的头指针,但是不知道为啥写了两份,这种写法更简洁吧可能
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)
 
 static inline size_t sdslen(const sds s) {
+    //通过偏移找到类别标志
     unsigned char flags = s[-1];
+    //通过和0111做与操作将高五位变成0只留低三位,然后获取对应结构体的len字段并返回
     switch(flags&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
             return SDS_TYPE_5_LEN(flags);
         case SDS_TYPE_8:
+            //通过SDS_HDR获取到的结构体指针直接获取长度
             return SDS_HDR(8,s)->len;
         case SDS_TYPE_16:
             return SDS_HDR(16,s)->len;
@@ -129,16 +133,20 @@ static inline size_t sdsavail(const sds s) {
     return 0;
 }
 
+//设置SDS长度
 static inline void sdssetlen(sds s, size_t newlen) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
             {
+                //获取flags的指针
                 unsigned char *fp = ((unsigned char*)s)-1;
+                //新长度向左移三位然后和类型的三位做或运算,将高五位的长度存储和低三位的类型混合在一起
                 *fp = SDS_TYPE_5 | (newlen << SDS_TYPE_BITS);
             }
             break;
         case SDS_TYPE_8:
+            //通过SDS_HDR获取到的结构体指针直接设置长度
             SDS_HDR(8,s)->len = newlen;
             break;
         case SDS_TYPE_16:

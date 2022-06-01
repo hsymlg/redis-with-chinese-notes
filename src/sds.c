@@ -210,8 +210,12 @@ sds sdsdup(const sds s) {
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
+//释放SDS内存
 void sdsfree(sds s) {
     if (s == NULL) return;
+    //这里s_free实际调了free释放内存,s[-1]指向的是flags,
+    //这里传进sdsHdrSize里面就可以获取对应类型结构体的大小,然后再从柔性数组开始减掉这个大小,
+    //就是这个结构体的开始位置,最后调用free释放掉整个结构体的内存
     s_free((char*)s-sdsHdrSize(s[-1]));
 }
 
@@ -238,6 +242,7 @@ void sdsupdatelen(sds s) {
  * However all the existing buffer is not discarded but set as free space
  * so that next append operations will not require allocations up to the
  * number of bytes previously available. */
+//对len进行清零而不释放柔性数组的内存,之后再写数据的时候直接覆盖即可
 void sdsclear(sds s) {
     sdssetlen(s, 0);
     s[0] = '\0';
@@ -255,55 +260,72 @@ void sdsclear(sds s) {
  *
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
+//扩容
 sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
     void *sh, *newsh;
+    //这里就是使用alloc减去len
     size_t avail = sdsavail(s);
     size_t len, newlen, reqlen;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
     size_t usable;
 
-    /* Return ASAP if there is enough space left. */
+    //如果可用空间大于要增加的长度,则不需要扩容直接返回
     if (avail >= addlen) return s;
-
+    //统计当前sds的长度
     len = sdslen(s);
+    //根据偏移量拿到sds的头部指针
     sh = (char*)s-sdsHdrSize(oldtype);
+    //新的长度等于当前长度加上要append的长度
     reqlen = newlen = (len+addlen);
-    assert(newlen > len);   /* Catch size_t overflow */
+    //防止长度溢出成负数
+    assert(newlen > len);
     if (greedy == 1) {
+        //如果新的长度小于1M
         if (newlen < SDS_MAX_PREALLOC)
+            //容量翻倍
             newlen *= 2;
         else
+            //大于1M则再加1M
             newlen += SDS_MAX_PREALLOC;
     }
-
+    //根据新长度重新设置类型
     type = sdsReqType(newlen);
 
-    /* Don't use type 5: the user is appending to the string and type 5 is
-     * not able to remember empty space, so sdsMakeRoomFor() must be called
-     * at every appending operation. */
+    //如果是sdshdr5则换成sdshdr8,同样是因为处于append的场景下
     if (type == SDS_TYPE_5) type = SDS_TYPE_8;
-
+    //获取该类型对应的结构体大小
     hdrlen = sdsHdrSize(type);
-    assert(hdrlen + newlen + 1 > reqlen);  /* Catch size_t overflow */
+    //防止容量溢出
+    assert(hdrlen + newlen + 1 > reqlen);
+    //如果结构体类型没变
     if (oldtype==type) {
+        //使用s_realloc_usable分配新内存,加1是为了结束符
         newsh = s_realloc_usable(sh, hdrlen+newlen+1, &usable);
         if (newsh == NULL) return NULL;
+        //更新柔性数组的指针
         s = (char*)newsh+hdrlen;
     } else {
-        /* Since the header size changes, need to move the string forward,
-         * and can't use realloc */
+        //如果类型变了的话,说明结构体里和长度有关的变量大小变了,这时候需要用s_malloc_usable重新分配内存
         newsh = s_malloc_usable(hdrlen+newlen+1, &usable);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len+1);
+        //释放原来的空间
         s_free(sh);
+        //更新柔性数组的指针
         s = (char*)newsh+hdrlen;
+        //更新类型为新类型
         s[-1] = type;
+        //更新sds的长度
         sdssetlen(s, len);
     }
+    //柔性数组可用容量为当前容量减去结构体大小再减去结束符
     usable = usable-hdrlen-1;
+    //如果可用容量比当前类型结构体能表示的最大容量大的话
     if (usable > sdsTypeMaxSize(type))
+        //使用最大容量作为可用容量
         usable = sdsTypeMaxSize(type);
+    //更新sds的可用容量
     sdssetalloc(s, usable);
     return s;
 }
@@ -513,11 +535,15 @@ sds sdsgrowzero(sds s, size_t len) {
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
 sds sdscatlen(sds s, const void *t, size_t len) {
+    //统计当前的sds长度
     size_t curlen = sdslen(s);
-
+    //扩容检查和执行扩容
     s = sdsMakeRoomFor(s,len);
+    //如果为空则直接返回空
     if (s == NULL) return NULL;
+    //调用memcpy将要append的内容复制过去
     memcpy(s+curlen, t, len);
+    //更新sds的长度
     sdssetlen(s, curlen+len);
     s[curlen+len] = '\0';
     return s;
@@ -535,7 +561,9 @@ sds sdscat(sds s, const char *t) {
  *
  * After the call, the modified sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
+//拼接字符串,const和指针变量一起使用，这样可以限制指针变量本身变为常量
 sds sdscatsds(sds s, const sds t) {
+    //调用sdscatlen并计算要拼接的字符串的长度
     return sdscatlen(s, t, sdslen(t));
 }
 
