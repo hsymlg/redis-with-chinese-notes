@@ -80,6 +80,8 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 #define SDS_TYPE_64 4
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
+//这里两个井号的意思是拼接,这个内联函数的作用是给指针赋上对应SDS结构体的地址
+//还是得感叹一下C语言真好用,能够直接拼接类型信息,s是指向柔性数组的指针,然后减去结构体的大小,就是结构体头部的位置了
 #define SDS_HDR_VAR(T,s) struct sdshdr##T *sh = (void*)((s)-(sizeof(struct sdshdr##T)));
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)

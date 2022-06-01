@@ -87,44 +87,61 @@ static inline size_t sdsTypeMaxSize(char type) {
     return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
 
-/* Create a new sds string with the content specified by the 'init' pointer
- * and 'initlen'.
- * If NULL is used for 'init' the string is initialized with zero bytes.
- * If SDS_NOINIT is used, the buffer is left uninitialized;
+/* 使用 'init' 指针和 'initlen' 指定的内容创建一个新的 sds 字符串.
+ * 'init' 如果是 NULL, 字符串初始化为 0 字节.
+ * 如果使用了 SDS_NOINIT, 那么缓冲区不会被初始化.
  *
- * The string is always null-terminated (all the sds strings are, always) so
- * even if you create an sds string with:
+ * 字符串总是以空终结符结束 (所有的 sds 字符串都是),
+ * 即使你使用如下方式创建一个 sds 字符串也是如此:
  *
  * mystring = sdsnewlen("abc",3);
  *
- * You can print the string with printf() as there is an implicit \0 at the
- * end of the string. However the string is binary safe and can contain
- * \0 characters in the middle, as the length is stored in the sds header. */
+ * 您可以使用 printf() 打印字符串, 因为字符串末尾有一个隐式的 \0.
+ * 不过, 字符串是二进制安全的, 中间可以包含 \0 字符, 因为长度存储在 sds 头部信息中 */
+//init对应要存储的字符数组的指针,initlen是sdsnew里通过strlen函数统计出来的字符串长度
 sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
+    // *sh指向整个sds开始的地方
     void *sh;
+    // sds是一个指针，在sds.h中定义了typedef char *sds,将char重命名了sds，s指向整个struct buf[]开始的位置
     sds s;
+    //根据不同的长度返回不同的类型的sds的type
     char type = sdsReqType(initlen);
-    /* Empty strings are usually created in order to append. Use type 8
-     * since type 5 is not good at this. */
+    /* 创建空字符串通常是为了之后扩展.
+     * 因为 sds5 不利于扩展, 所以会被转化为 sds8 */
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
+    //获取整个struct的长度
     int hdrlen = sdsHdrSize(type);
-    unsigned char *fp; /* flags pointer. */
+    // flag指针，这个指针就是用来表示sds的type
+    unsigned char *fp;
+    //size_t是unsigned int 类型，无符号，它的取值没有负数
+    //定义可用空间
     size_t usable;
 
-    assert(initlen + hdrlen + 1 > initlen); /* Catch size_t overflow */
+    //C语言中为了不同平台间数值类型的可移植性,使用size_t代替unsigned int类型，
+    //而这里initlen就是size_t的类型,这里的assert是避免initlen + hdrlen + 1之后溢出变成负数
+    assert(initlen + hdrlen + 1 > initlen);
+    //分配内存,其中s_trymalloc_usable是调整内存,s_malloc_usable是新分配内存,这里对应了两种内存分配的方式,通过参数trymalloc控制
     sh = trymalloc?
         s_trymalloc_usable(hdrlen+initlen+1, &usable) :
         s_malloc_usable(hdrlen+initlen+1, &usable);
+    //如果分配完内存发现是NULL的话就返回NULL
     if (sh == NULL) return NULL;
+    //如果传的是SDS_NOINIT的话,代表想要一个初始化的字符串,这时候就直接弄个空
     if (init==SDS_NOINIT)
         init = NULL;
+    //如果不是初始化的话,需要用memset初始化一下，把sh后面的前hdrlen+initlen+1个字符置为0
     else if (!init)
         memset(sh, 0, hdrlen+initlen+1);
+    //把s指向sds的柔性数组,这里从结构体头部位置向后加hdrlen就是柔性数组的位置
     s = (char*)sh+hdrlen;
+    //这里指向柔性数组地址减1的地址,也就是flags字段的位置
     fp = ((unsigned char*)s)-1;
+    //可用空间需要减去现在已经占用的空间再减去'\0'
     usable = usable-hdrlen-1;
+    //如果可用空间大于当前结构体中alloc字段的大小,就使用alloc的最大值
     if (usable > sdsTypeMaxSize(type))
         usable = sdsTypeMaxSize(type);
+    //初始化结构体中的柔性数组指针、字符串长度、可用大小以及类型
     switch(type) {
         case SDS_TYPE_5: {
             *fp = type | (initlen << SDS_TYPE_BITS);
@@ -160,7 +177,9 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
         }
     }
     if (initlen && init)
+        //使用memcpy把字符串的内容复制到SDS中
         memcpy(s, init, initlen);
+    //添加末尾的结束符
     s[initlen] = '\0';
     return s;
 }
