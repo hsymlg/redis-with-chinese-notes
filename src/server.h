@@ -911,13 +911,21 @@ typedef struct clusterSlotToKeyMapping clusterSlotToKeyMapping;
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
-    dict *dict;                 /* The keyspace for this DB */
-    dict *expires;              /* Timeout of keys with a timeout set */
-    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
-    dict *ready_keys;           /* Blocked keys that received a PUSH */
-    dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
-    int id;                     /* Database ID */
-    long long avg_ttl;          /* Average TTL, just for stats */
+    // 数据库键空间，保存着数据库中的所有键值对
+    dict *dict;
+    //键的过期时间，字典的键为键，字典的值为过期事件 UNIX 时间戳
+    //expires字典的key：执行键的指针；value：过期时间
+    dict *expires;
+    // 正处于阻塞状态的键
+    dict *blocking_keys;
+    // 可以解除阻塞的键
+    dict *ready_keys;
+    // 正在被 WATCH 命令监视的键
+    dict *watched_keys;
+    // 数据库号码
+    int id;
+    // 数据库的键的平均 TTL ，统计信息
+    long long avg_ttl;
     unsigned long expires_cursor; /* Cursor of the active expire cycle. */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
     clusterSlotToKeyMapping *slots_to_keys; /* Array of slots to keys. Only used in cluster mode (db 0). */

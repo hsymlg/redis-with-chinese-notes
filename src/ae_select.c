@@ -80,7 +80,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
 
     memcpy(&state->_rfds,&state->rfds,sizeof(fd_set));
     memcpy(&state->_wfds,&state->wfds,sizeof(fd_set));
-
+    //select就是linux下，老版本的linux内核中，多路复用的一种实现
     retval = select(eventLoop->maxfd+1,
                 &state->_rfds,&state->_wfds,NULL,tvp);
     if (retval > 0) {
@@ -93,6 +93,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                 mask |= AE_READABLE;
             if (fe->mask & AE_WRITABLE && FD_ISSET(j,&state->_wfds))
                 mask |= AE_WRITABLE;
+            //将select返回的，已就绪的文件描述符，填充到fired 属性。
             eventLoop->fired[numevents].fd = j;
             eventLoop->fired[numevents].mask = mask;
             numevents++;

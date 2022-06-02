@@ -109,6 +109,8 @@ typedef struct aeEventLoop {
     // 已就绪的文件事件
     aeFiredEvent *fired; /* Fired events */
     // 时间事件
+    //redis有一些后台任务，比如清理过期key，这个不是一蹴而就的；
+    //每次周期运行后台任务时，就会去清理一部分，而这里的后台任务，其实就是上面这个数据结构中的时间事件
     aeTimeEvent *timeEventHead;
     // 事件处理器的开关
     int stop;
