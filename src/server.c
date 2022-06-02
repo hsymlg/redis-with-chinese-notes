@@ -1429,6 +1429,8 @@ void blockingOperationEnds() {
  * It attempts to do its duties at a similar rate as the configured server.hz,
  * and updates cronloops variable so that similarly to serverCron, the
  * run_with_period can be used. */
+//redis server的周期执行函数，类似于java中的ScheduledThreadPoolExecutor，
+//当这个周期任务，检测到server.shutdown_asap打开后，就会去关闭服务器。
 void whileBlockedCron() {
     /* Here we may want to perform some cron jobs (normally done server.hz times
      * per second). */
@@ -1474,8 +1476,11 @@ void whileBlockedCron() {
 
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
+    // 服务器进程收到 SIGTERM 信号，关闭服务器
     if (server.shutdown_asap && server.loading) {
+        // 尝试关闭服务器
         if (prepareForShutdown(SHUTDOWN_NOSAVE) == C_OK) exit(0);
+        // 如果关闭失败，那么打印 LOG ，并移除关闭标识
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
         server.shutdown_asap = 0;
         server.last_sig_received = 0;
@@ -1661,7 +1666,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 }
 
 /* =========================== Server initialization ======================== */
-
+//redis在返回响应的时候，通常就是一句："+OK"之类的。这个字符串，如果每次响应的时候，再去new一个，也太浪费了，
+//所以，干脆，redis自己把这些常用的字符串，缓存了起来
 void createSharedObjects(void) {
     int j;
 
@@ -2376,12 +2382,14 @@ void makeThreadKillable(void) {
 
 void initServer(void) {
     int j;
-
+    // 设置信号处理函数
+    //信号其实是linux下进程间通讯的一种手段，比如kill -9 ，就会给对应的pid，发送一个SIGKILL 命令；
+    //在redis前台运行时，你按下ctrl + c，其实也是发送了一个信号，信号为SIGINT，值为2
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
     makeThreadKillable();
-
+    //这个就是发送日志到linux系统的syslog
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
@@ -2397,6 +2405,8 @@ void initServer(void) {
     server.errors = raxNew();
     server.fixed_time_expire = 0;
     server.in_nested_call = 0;
+    //server是一个全局变量，维护当前redis server的各种状态，clients呢，是用来保存当前连接到redis server的客户端
+    //这里其实就是调用listCreate()，创建了一个空链表，然后赋值给clients
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
@@ -2437,11 +2447,12 @@ void initServer(void) {
         server.client_mem_usage_buckets[j].mem_usage_sum = 0;
         server.client_mem_usage_buckets[j].clients = listCreate();
     }
-
+    //创建字符串常量池
     createSharedObjects();
     adjustOpenFilesLimit();
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
+    //创建事件循环
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
@@ -6293,7 +6304,7 @@ int changeListenPort(int port, socketFds *sfd, aeFileProc *accept_handler) {
 
     return C_OK;
 }
-
+//这个函数就是打开server这个全局变量的shutdown_asap。
 static void sigShutdownHandler(int sig) {
     char *msg;
 
@@ -6321,17 +6332,20 @@ static void sigShutdownHandler(int sig) {
     }
 
     serverLogFromHandler(LL_WARNING, msg);
+    // 打开关闭标识
     server.shutdown_asap = 1;
     server.last_sig_received = sig;
 }
 
 void setupSignalHandlers(void) {
+    //使用act来处理信号，是一个局部变量，它有一个字段
     struct sigaction act;
 
     /* When the SA_SIGINFO flag is set in sa_flags then sa_sigaction is used.
      * Otherwise, sa_handler is used. */
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
+    //这是一个函数指针。函数指针类似于java中的一个static方法的引用，为什么是static，因为执行这类方法不需要new一个对象
     act.sa_handler = sigShutdownHandler;
     sigaction(SIGTERM, &act, NULL);
     sigaction(SIGINT, &act, NULL);
