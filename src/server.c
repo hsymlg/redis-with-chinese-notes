@@ -1833,15 +1833,18 @@ void initServerConfig(void) {
 
     initConfigValues();
     updateCachedTime(1);
+    // 设置服务器的运行 ID
     getRandomHexChars(server.runid,CONFIG_RUN_ID_SIZE);
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
     clearReplicationId2();
+    // 设置默认服务器频率
     server.hz = CONFIG_DEFAULT_HZ; /* Initialize it ASAP, even if it may get
                                       updated later after loading the config.
                                       This value may be used before the server
                                       is initialized. */
     server.timezone = getTimeZone(); /* Initialized by tzset(). */
+    // 设置默认配置文件路径
     server.configfile = NULL;
     server.executable = NULL;
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
@@ -2585,6 +2588,8 @@ void initServer(void) {
 
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
+    //运行事件处理器，一直到服务器关闭为止
+    //跳入死循环，开始等待接收连接，处理客户端的请求；同时，周期执行后台任务，比如删除过期key等
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
@@ -6878,12 +6883,17 @@ int main(int argc, char **argv) {
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
+    //设置时区
     setlocale(LC_COLLATE,"");
     tzset(); /* Populates 'timezone' global. */
+    //设置oom发生时的函数指针，函数指针指向一个函数，类似于java 8中，lambda表达式中，
+    //丢一个方法的引用给流；函数指针会在oom时，被回调，总体来说，就类似于java中的模板设计模式或者策略模式。
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
 
     /* To achieve entropy, in case of containers, their time() and getpid() can
      * be the same. But value of tv_usec is fast enough to make the difference */
+    //获取当前时间，设置到 tv这个变量中
+    //注意，这里把tv的地址传进去了，这是c语言中典型的用法，类似于java中传一个对象的引用进去，然后在方法内部，会修改该对象的内部field等
     gettimeofday(&tv,NULL);
     srand(time(NULL)^getpid()^tv.tv_usec);
     srandom(time(NULL)^getpid()^tv.tv_usec);
@@ -6902,7 +6912,9 @@ int main(int argc, char **argv) {
 
     char *exec_name = strrchr(argv[0], '/');
     if (exec_name == NULL) exec_name = argv[0];
+    //检查服务器是否以 Sentinel 模式启动
     server.sentinel_mode = checkForSentinelMode(argc,argv, exec_name);
+    //初始化服务器
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
@@ -6919,6 +6931,8 @@ int main(int argc, char **argv) {
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
+    //因为sentinel和普通的redis server其实是共用同一份代码，
+    //所以这里启动时，要看是启动sentinel，还是启动普通的redis server，如果是启动sentinel，则进行sentinel相关配置
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
@@ -6931,7 +6945,7 @@ int main(int argc, char **argv) {
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(exec_name,"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
-
+    //检查启动时的命令行参数中，是否指定了配置文件，如果指定了，要使用配置文件的配置为准
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
         sds options = sdsempty();
@@ -6983,13 +6997,14 @@ int main(int argc, char **argv) {
             }
             j++;
         }
-
+        // 载入配置文件， options 是前面分析出的给定选项
         loadServerConfig(server.configfile, config_from_stdin, options);
         if (server.sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
     server.supervised = redisIsSupervised(server.supervised_mode);
+    //将服务器设置为守护进程
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
@@ -7007,13 +7022,17 @@ int main(int argc, char **argv) {
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }
-
+    //创建并初始化服务器数据结构
     initServer();
+    //如果服务器是守护进程，那么创建 PID 文件
+    //创建pid文件，一般默认路径：/var/run/redis.pid，这个可以在redis.conf进行配置
     if (background || server.pidfile) createPidFile();
+    //为服务器进程设置名字
     if (server.set_proc_title) redisSetProcTitle(NULL);
+    //打印 ASCII LOGO
     redisAsciiArt();
     checkTcpBacklogSettings();
-
+    //如果服务器不是运行在 SENTINEL 模式，那么执行以下代码
     if (!server.sentinel_mode) {
         /* Things not needed when running in Sentinel mode. */
         serverLog(LL_WARNING,"Server initialized");
@@ -7041,9 +7060,11 @@ int main(int argc, char **argv) {
         ACLLoadUsersAtStartup();
         InitServerLast();
         aofLoadManifestFromDisk();
+        // 从 AOF 文件或者 RDB 文件中载入数据
         loadDataFromDisk();
         aofOpenIfNeededOnServerStart();
         aofDelHistoryFiles();
+        // 启动集群
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,
@@ -7083,6 +7104,8 @@ int main(int argc, char **argv) {
     setOOMScoreAdj(-1);
 
     aeMain(server.el);
+    //服务器关闭，停止事件循环
+    //服务器关闭，一般来说，走不到这里，一般都是陷入在12处的死循环中；只有在某些场景下，将一个全局变量stop修改为true后，程序会从12处跳出死循环，然后走到这里。
     aeDeleteEventLoop(server.el);
     return 0;
 }

@@ -49,10 +49,10 @@ struct __attribute__ ((__packed__)) sdshdr5 {
     char buf[];
 };
 struct __attribute__ ((__packed__)) sdshdr8 {
-    uint8_t len; /* used */
-    uint8_t alloc; /* excluding the header and null terminator */
-    unsigned char flags; /* 3 lsb of type, 5 unused bits */
-    char buf[];
+    uint8_t len; //buf 已经使用的长度
+    uint8_t alloc; //buf 分配的长度，等于buf[]的总长度-1，因为buf有包括一个/0的结束符
+    unsigned char flags; //只有3位有效位，因为类型的表示就是0到4，所有这个8位的flags 有5位没有被用到
+    char buf[];//实际的字符串存在这里
 };
 struct __attribute__ ((__packed__)) sdshdr16 {
     uint16_t len; /* used */
