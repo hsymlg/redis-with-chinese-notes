@@ -105,8 +105,11 @@ typedef struct aeEventLoop {
     // 用于生成时间事件 id
     long long timeEventNextId;
     // 已注册的文件事件
+    //注册到多路复用库，需要监听的socket 文件描述符事件，比如，某socket的可读事件；
     aeFileEvent *events; /* Registered events */
     // 已就绪的文件事件
+    //以select或者epoll这类多路复用库为例，在一次 select 中，如果发现某些socket事件已经满足，则，这些ready的事件，会被存放到本属性中。
+    //select() 允许一个程序去监听多个文件描述符，等待直到1个或多个文件描述符变成 ready状态，该状态下，可以不阻塞地读写该文件描述符。
     aeFiredEvent *fired; /* Fired events */
     // 时间事件
     //redis有一些后台任务，比如清理过期key，这个不是一蹴而就的；
@@ -115,6 +118,7 @@ typedef struct aeEventLoop {
     // 事件处理器的开关
     int stop;
     // 多路复用库的私有数据
+    //指向当前正在使用的多路复用库的相关数据，目前redis支持：select、epoll、kqueue、evport
     void *apidata; /* This is used for polling API specific data */
     // 在处理事件前要执行的函数
     aeBeforeSleepProc *beforesleep;

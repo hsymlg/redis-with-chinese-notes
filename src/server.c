@@ -84,7 +84,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 struct redisServer server; /* Server global state */
 
 /*============================ Internal prototypes ========================== */
-
+//inline内联函数，避免了频繁调用函数对栈内存重复开辟所带来的消耗
 static inline int isShutdownInitiated(void);
 int isReadyToShutdown(void);
 int finishShutdown(void);
@@ -1511,6 +1511,7 @@ extern int ProcessingEventsWhileBlocked;
  *
  * The most important is freeClientsInAsyncFreeQueue but we also
  * call some other low-risk functions. */
+//ae.c中的eventLoop->beforesleep(eventLoop);
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
@@ -2516,6 +2517,7 @@ void initServer(void) {
     server.pubsub_channels = dictCreate(&keylistDictType);
     server.pubsub_patterns = dictCreate(&keylistDictType);
     server.pubsubshard_channels = dictCreate(&keylistDictType);
+    //serverCron() 函数的运行次数计数器
     server.cronloops = 0;
     server.in_script = 0;
     server.in_exec = 0;
@@ -2537,8 +2539,11 @@ void initServer(void) {
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
+    // AOF 缓冲区
     server.aof_buf = sdsempty();
+    // 最后一次完成 SAVE 的时间
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
+    // 最后一次尝试执行 BGSAVE 的时间
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
     server.rdb_save_time_start = -1;
@@ -2575,6 +2580,11 @@ void initServer(void) {
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
+    //这里的serverCron就是一个函数，后续每次周期触发时间事件时，就会运行这个serverCron。
+    //可以看这里的英文注释，作者也提到，这是主要的处理后台任务的方式。
+    //为 serverCron() 创建时间事件
+    //el，实际就是EventLoop的简写；结构体 aeEventLoop，里面维护了：当前使用的多路复用库的函数、
+    //当前注册到多路复用库，在发生读写事件时，需要被通知的socket 文件描述符、以及其他一些东西。
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
@@ -2604,6 +2614,7 @@ void initServer(void) {
      * before loading persistence since it is used by processEventsWhileBlocked. */
     //运行事件处理器，一直到服务器关闭为止
     //跳入死循环，开始等待接收连接，处理客户端的请求；同时，周期执行后台任务，比如删除过期key等
+    //设置处理事件前，先要执行的一个函数。
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
@@ -2616,10 +2627,12 @@ void initServer(void) {
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
-
+    // 如果服务器以 cluster 模式打开，那么初始化 cluster
     if (server.cluster_enabled) clusterInit();
+    // 初始化脚本系统
     scriptingInit(1);
     functionsInit();
+    //初始化慢查询功能
     slowlogInit();
     latencyMonitorInit();
 
@@ -2635,6 +2648,7 @@ void initServer(void) {
  * Thread Local Storage initialization collides with dlopen call.
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
+    //初始化慢查询功能
     bioInit();
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
@@ -6159,9 +6173,12 @@ void createPidFile(void) {
     if (!server.pidfile) server.pidfile = zstrdup(CONFIG_DEFAULT_PID_FILE);
 
     /* Try to write the pid file in a best-effort way. */
+    //打开文件，这里的pidfile就是前面的文件名，/var/run/redis.pid，配置文件可以对其修改。模式为w,表示将对其写入
     FILE *fp = fopen(server.pidfile,"w");
     if (fp) {
+        //调用pid，获取当前进程的pid，写入该文件描述符
         fprintf(fp,"%d\n",(int)getpid());
+        //关闭文件
         fclose(fp);
     }
 }
@@ -6584,13 +6601,18 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 }
 
 /* Function called at startup to load RDB or AOF file in memory. */
+//在启动时，会检查aof和rdb选项是否打开，如果打开，则会去加载数据，这里要注意的是，redis总是先查看是否有 aof 开关是否打开；
+//打开的话，则直接使用 aof；如果 aof 没打开，则去加载 rdb 文件。
 void loadDataFromDisk(void) {
+    // 记录开始时间
     long long start = ustime();
+    // AOF 持久化已打开
     if (server.aof_state == AOF_ON) {
         int ret = loadAppendOnlyFiles(server.aof_manifest);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR)
             exit(1);
     } else {
+        // 尝试载入 RDB 文件
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         errno = 0; /* Prevent a stale value from affecting error checking */
         int rdb_flags = RDBFLAGS_NONE;
@@ -6850,8 +6872,16 @@ redisTestProc *getTestProcByName(const char *name) {
     return NULL;
 }
 #endif
-
+//char **argv是一个二重指针。char **argv≈char * argv[]
+//argc: 整数,用来统计你运行程序时送给main函数的命令行参数的个数
+//　　　　* argv[ ]: 指针数组，用来存放指向你的字符串参数的指针，每一个元素指向一个参数
+//　　　　argv[0] 指向程序运行的全路径名
+//　　　　argv[1] 指向在DOS命令行中执行程序名后的第一个字符串
+//　　　　argv[2] 指向执行程序名后的第二个字符串
+//　　　　...
+//　　　　argv[argc]为NULL。
 int main(int argc, char **argv) {
+    //定义当前时间
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
@@ -6921,6 +6951,7 @@ int main(int argc, char **argv) {
      * to reset it and restore it back. We do this early to avoid a potential
      * race condition with threads that could be creating files or directories.
      */
+    //Linux umask命令指定在建立文件时预设的权限掩码
     umask(server.umask = umask(0777));
 
     uint8_t hashseed[16];
@@ -7119,7 +7150,7 @@ int main(int argc, char **argv) {
 
     redisSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
-
+    //事件循环处理器的主循环
     aeMain(server.el);
     //服务器关闭，停止事件循环
     //服务器关闭，一般来说，走不到这里，一般都是陷入在12处的死循环中；只有在某些场景下，将一个全局变量stop修改为true后，程序会从12处跳出死循环，然后走到这里。

@@ -395,7 +395,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             tv.tv_sec = tv.tv_usec = 0;
             tvp = &tv;
         }
-
+        //首先执行eventLoop的事件处理前要执行的函数；接着再开始处理事件。
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP)
             eventLoop->beforesleep(eventLoop);
 
@@ -493,6 +493,7 @@ int aeWait(int fd, int mask, long long milliseconds) {
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
     while (!eventLoop->stop) {
+        // 开始处理事件
         aeProcessEvents(eventLoop, AE_ALL_EVENTS|
                                    AE_CALL_BEFORE_SLEEP|
                                    AE_CALL_AFTER_SLEEP);

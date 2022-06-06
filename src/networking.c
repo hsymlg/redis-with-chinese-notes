@@ -1327,7 +1327,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         return;
     }
 }
-
+//这里的acceptTcpHandler就是处理新连接的函数
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
@@ -1336,6 +1336,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
+        // accept 客户端连接
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -1344,6 +1345,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
+        // 为客户端创建客户端状态（redisClient）
         acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }
