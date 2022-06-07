@@ -497,13 +497,15 @@ void getexCommand(client *c) {
         }
     }
 }
-
+/* 处理 getdel 命令的函数 */
 void getdelCommand(client *c) {
+    /* 先调用 getGenericCommand 函数获取值并回复客户端，再进行删除操作 */
     if (getGenericCommand(c) == C_ERR) return;
     int deleted = server.lazyfree_lazy_user_del ? dbAsyncDelete(c->db, c->argv[1]) :
                   dbSyncDelete(c->db, c->argv[1]);
     if (deleted) {
         /* Propagate as DEL/UNLINK command */
+        /* 作为 DEL/UNLINK 命令传播 */
         robj *aux = server.lazyfree_lazy_user_del ? shared.unlink : shared.del;
         rewriteClientCommandVector(c,2,aux,c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
@@ -511,26 +513,30 @@ void getdelCommand(client *c) {
         server.dirty++;
     }
 }
-
+/* 处理 getset 命令的函数 */
 void getsetCommand(client *c) {
+    /* 先调用 getGenericCommand 函数获取值并回复客户端，再进行设置操作 */
     if (getGenericCommand(c) == C_ERR) return;
+    /* 调用 tryObjectEncoding 函数，给要设置的值选择合适的编码类型 */
     c->argv[2] = tryObjectEncoding(c->argv[2]);
+    /* 在数据库中设置键值对 */
     setKey(c,c->db,c->argv[1],c->argv[2],0);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
     server.dirty++;
 
     /* Propagate as SET command */
+    /* 作为 SET 命令传播 */
     rewriteClientCommandArgument(c,0,shared.set);
 }
-
+/* 处理 setrange 命令的函数 */
 void setrangeCommand(client *c) {
     robj *o;
     long offset;
     sds value = c->argv[3]->ptr;
-
+    /* 取出 offset */
     if (getLongFromObjectOrReply(c,c->argv[2],&offset,NULL) != C_OK)
         return;
-
+    /* offset 为负报错并返回 */
     if (offset < 0) {
         addReplyError(c,"offset is out of range");
         return;
@@ -539,12 +545,14 @@ void setrangeCommand(client *c) {
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
         /* Return 0 when setting nothing on a non-existing string */
+        /* 如果 o 为 NULL 且 value 长度为 0 ，向客户端回复0并返回 */
         if (sdslen(value) == 0) {
             addReply(c,shared.czero);
             return;
         }
 
         /* Return when the resulting string exceeds allowed size */
+        /* 如果设置后的新字符串长度会超过长度最大值限制，则报错并返回 */
         if (checkStringLength(c,offset+sdslen(value)) != C_OK)
             return;
 
