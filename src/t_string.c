@@ -61,7 +61,25 @@ static int checkStringLength(client *c, long long size) {
  *
  * If ok_reply is NULL "+OK" is used.
  * If abort_reply is NULL, "$-1" is used. */
-
+/* setGenericCommand（）函数使用不同的选项和变量，
+ * 调用此函数是为了实现以下命令：
+ * SET , SETEX , PSETEX , SETNX , GETSET.
+ *
+ * flags 影响函数的执行过程（NX、XX 或 GET，见下文的 define）
+ * flags 如何使用？以 OBJ_SET_NX 为例：
+ * 没设置任何标志位的时候 flags = 0，
+ * 设置 OBJ_SET_NX 标志则是用 flags 保存 flags 与 OBJ_SET_NX 异或结果(flags |= OBJ_SET_NX)
+ * 判断是否有 OBJ_SET_NX 标志，若存在该标志则 flags & OBJ_SET_NX == 1
+ *
+ * "expire" 表示给用户传递的 Redis 对象设置的过期时间，
+ * 过期时间单位根据 'unit' 参数进行解析。
+ *
+ * 'ok_reply' 和 'abort_reply' 是在执行操作时，
+ * 函数将向客户端回复的内容。
+ *
+ * 如果 ok_reply 为 NULL，则返回 "+OK"
+ * 如果 abort_reply 为 NULL，则返回 "-1"。
+*/
 #define OBJ_NO_FLAGS 0
 #define OBJ_SET_NX (1<<0)          /* Set if key not exists. */
 #define OBJ_SET_XX (1<<1)          /* Set if key exists. */
@@ -81,16 +99,20 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
     int found = 0;
     int setkey_flags = 0;
 
+    /* 若命令带有设置过期功能，取出过期时间，若输入过期时间不合法返回 C_ERR ，导致报错并返回，
+     * 调用 getExpireMillisecondsOrReply 函数后 milliseconds 将会被赋值成毫秒过期时间，
+     * 注意 redis 都是以毫秒保存过期时间，若输入单位为秒则会转换为毫秒 */
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
-
+    /* 若输入命令为 GETSET ，先执行 getGenericCommand 检查 key，
+     * 若 key 类型不为 string 会返回 C_ERR ，导致报错并返回 */
     if (flags & OBJ_SET_GET) {
         if (getGenericCommand(c) == C_ERR) return;
     }
-
+    /* 若 key 存在，found = 1 */
     found = (lookupKeyWrite(c->db,key) != NULL);
-
+    /* 若输入命令带有 NX 而 key 存在，或带有 XX 而 key 不存在，则在这返回 */
     if ((flags & OBJ_SET_NX && found) ||
         (flags & OBJ_SET_XX && !found))
     {
@@ -99,29 +121,39 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
         }
         return;
     }
-
+    /* 设置 setkey_flags ，setkey_flags 将影响 setKey 函数的执行过程，
+     * 第一个是 set 命令是否带有 keepttl 可选参数，若没有将会撤销 key 的过期时间（如果有），
+     * 第二个是 key 是否已经存在，若不存在会在 setKey 时创建该 key ，若已经存在则重写 */
     setkey_flags |= (flags & OBJ_KEEPTTL) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
-
+    /* 在数据库中设置键值 */
     setKey(c,c->db,key,val,setkey_flags);
+    /* 脏数据 + 1，
+     * dirty 记录缓存对本地存储而言的数据变动次数，
+     * 持久化时将会削减计数（削减值为保存到本地的数据量），主动使用 SAVE 或 BGSAVE 成功保存将会清零 */
     server.dirty++;
+    /* 发送事件通知 */
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
-
+    /* 如果命令要求设置过期时间，则设置它 */
     if (expire) {
         setExpire(c,c->db,key,milliseconds);
         /* Propagate as SET Key Value PXAT millisecond-timestamp if there is
          * EX/PX/EXAT/PXAT flag. */
+        /* 如果有 EX/PX/EXAT/PXAT 标志，
+         * 则修改客户端参数数组为 SET Key Value PXAT millisecond-timestamp 进行传播(传播到 AOF 或从服务器) */
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
         rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
         decrRefCount(milliseconds_obj);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);
     }
-
+    /* 命令非 GETSET ，则向客户端发送回复 */
     if (!(flags & OBJ_SET_GET)) {
         addReply(c, ok_reply ? ok_reply : shared.ok);
     }
 
     /* Propagate without the GET argument (Isn't needed if we had expire since in that case we completely re-written the command argv) */
+    /* 如果输入命令为 GETSET，
+     * 在没有 GET 参数的情况下进行传播（如果有 "expire" 就不要了，因为在这种情况下我们完全重新编写了命令参数数组 argv）*/
     if ((flags & OBJ_SET_GET) && !expire) {
         int argc = 0;
         int j;
@@ -153,7 +185,20 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
  * If return C_OK, "milliseconds" output argument will be set to the resulting absolute timestamp.
  * If return C_ERR, an error reply has been added to the given client.
  */
+/*
+ * 提取一个给定的 GET/SET 命令的 `expire` 参数，作为一个绝对的时间戳，单位是毫秒。
+ *
+ * "client" 是发送 `expire' 参数的客户端。
+ * "expire" 是要提取的 `expire` 参数。
+ * "flags" 代表该命令的行为（例如 PX 或 EX）
+ * "unit" 是给定的 `expire` 参数的原始单位（例如 UNIT_SECONDS）
+ * "milliseconds" 是输出参数。
+ *
+ * 如果返回 C_OK ，"milliseconds" 输出参数将被设置为结果的绝对时间戳。
+ * 如果返回 C_ERR ，一个错误回复已被添加到发送该命令的客户端。
+ */
 static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds) {
+    /* 调用 getLongLongFromObjectOrReply 后，若无报错则 milliseconds 被赋值成输入的过期时间数值 */
     int ret = getLongLongFromObjectOrReply(c, expire, milliseconds, NULL);
     if (ret != C_OK) {
         return ret;
@@ -161,10 +206,11 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
 
     if (*milliseconds <= 0 || (unit == UNIT_SECONDS && *milliseconds > LLONG_MAX / 1000)) {
         /* Negative value provided or multiplication is gonna overflow. */
+        /* milliseconds 为负，或超出最大限制值将导致报错并返回。 */
         addReplyErrorExpireTime(c);
         return C_ERR;
     }
-
+    /* 若输入单位为秒，则转换为毫秒 */
     if (unit == UNIT_SECONDS) *milliseconds *= 1000;
 
     if ((flags & OBJ_PX) || (flags & OBJ_EX)) {
@@ -173,13 +219,14 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
 
     if (*milliseconds <= 0) {
         /* Overflow detected. */
+        /* 此时发生上溢 */
         addReplyErrorExpireTime(c);
         return C_ERR;
     }
 
     return C_OK;
 }
-
+/* 用于在下方 parseExtendedStringArgumentsOrReply() 函数表示命令为 SET 还是 GET */
 #define COMMAND_GET 0
 #define COMMAND_SET 1
 /*
@@ -198,6 +245,21 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
  * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
  * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
  */
+/*
+  * parseExtendedStringArgumentsOrReply()函数对SET和GET命令中使用的扩展命令进行普通验证。
+  *
+  * GET 特定的命令 - PERSIST/DEL
+  * SET 特定的命令 - XX/NX/GET
+  * 通用命令 - EX/EXAT/PX/PXAT/KEEPTTL
+  *
+  * 该函数需要指向客户端(c)、标志(flags)、单位(unit)的指针，如果需要的话，还需要指向过期时间的指针(expire)以及命令类型(command_type)，
+  * 命令类型可以是 COMMAND_GET 或 COMMAND_SET。
+  *
+  * 如果有任何违反语法的行为，将返回 C_ERR ，否则将返回 C_OK。
+  *
+  * 在解析参数的时候，输入标志会被更新。如果有任何 EXAT/PX/PXAT 参数，单位和过期时间将被更新。
+  * 如果设置了 PX/PXAT ，单位将被更新为毫秒。
+  */
 int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, int command_type) {
 
     int j = command_type == COMMAND_GET ? 2 : 3;
@@ -284,6 +346,7 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
 
 /* SET key value [NX] [XX] [KEEPTTL] [GET] [EX <seconds>] [PX <milliseconds>]
  *     [EXAT <seconds-timestamp>][PXAT <milliseconds-timestamp>] */
+/* 处理 set 命令的函数 */
 void setCommand(client *c) {
     robj *expire = NULL;
     int unit = UNIT_SECONDS;
@@ -296,36 +359,36 @@ void setCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
-
+/* 处理 setnx 命令的函数 */
 void setnxCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,OBJ_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
 }
-
+/* 处理 setex 命令的函数 */
 void setexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,OBJ_EX,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
 }
-
+/* 处理 psetex 命令的函数 */
 void psetexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,OBJ_PX,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
 }
-
+/* get 的通用实现函数 */
 int getGenericCommand(client *c) {
     robj *o;
-
+    /* 若查找不到该 key，向客户端发送 nil（lookupKeyReadOrReply函数中完成），返回 C_OK */
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
         return C_OK;
-
+    /* 查找到 key ，但对应的对象类型不是 string 则 checkType 会返回 1，返回 C_ERR */
     if (checkType(c,o,OBJ_STRING)) {
         return C_ERR;
     }
-
+    /* 向客户端回复对象的值 */
     addReplyBulk(c,o);
     return C_OK;
 }
-
+/* 处理 get 命令的函数 */
 void getCommand(client *c) {
     getGenericCommand(c);
 }
@@ -350,38 +413,60 @@ void getCommand(client *c) {
  *
  * Command would either return the bulk string, error or nil.
  */
+/* GETEX <key>[PERSIST][EX seconds][PX milliseconds][EXAT seconds - timestamp][PXAT milliseconds - timestamp]。
+ *
+ * getexCommand() 函数实现了 GET 命令的扩展选项和变体。但不像 GET 命令，这个命令不是只读的。
+ * 没有指定选项时的默认行为与 GET 相同，不会改变任何 TTL（对象的生存时间）
+ *
+ * 在一次命令内只能使用以下选项之一
+ *
+ * 1. PERSIST 删除任何与键相关的 TTL
+ * 2. EX 以秒为单位设置过期 TTL
+ * 3. PX 以毫秒为单位设置过期的 TTL
+ * 4. EXAT 与 EX 作用相同，但不是指定代表TTL的秒数,而是采用一个绝对的 Unix 时间戳
+ *
+ * 5. PXAT 与 PX 作用相同，但不是指定代表TTL的毫秒数，而是采用一个绝对的 Unix 时间戳
+ *
+ * 命令将返回批量字符串、错误或 nil
+ */
 void getexCommand(client *c) {
     robj *expire = NULL;
     int unit = UNIT_SECONDS;
     int flags = OBJ_NO_FLAGS;
-
+    /* 解析输入的命令字符串 */
     if (parseExtendedStringArgumentsOrReply(c,&flags,&unit,&expire,COMMAND_GET) != C_OK) {
         return;
     }
 
     robj *o;
-
+    /* 在数据库中查找 key ，并给 o 赋值为 key 所对应的对象，若为 NULL 则返回 */
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
         return;
-
+    /* 检查对象类型 */
     if (checkType(c,o,OBJ_STRING)) {
         return;
     }
 
     /* Validate the expiration time value first */
+    /* 首先验证并获取过期时间值 */
     long long milliseconds = 0;
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
 
     /* We need to do this before we expire the key or delete it */
+    /* 在过期或删除 key 之前，我们需要先将 value 回复给客户端 */
     addReplyBulk(c,o);
 
     /* This command is never propagated as is. It is either propagated as PEXPIRE[AT],DEL,UNLINK or PERSIST.
      * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
+    /* 该命令不会被原封不动地传播。它要么以 PEXPIRE[AT] 、 DEL 、 UNLINK 或 PERSIST 的形式传播 */
+    /* 这就是为什么它不需要在 feedAppendOnlyFile 函数中进行将相对过期时间转换成绝对过期时间的特殊处理 */
     if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(milliseconds)) {
         /* When PXAT/EXAT absolute timestamp is specified, there can be a chance that timestamp
          * has already elapsed so delete the key in that case. */
+        /*当指定 PXAT/EXAT 绝对时间戳时，有可能出现时间戳已经过期的情况，所以要删除该键 */
+        /* 根据 lazyfree_lazy_expire 选项设置选择异步删除或是同步删除，该选项默认为0，即选择同步删除 */
         int deleted = server.lazyfree_lazy_expire ? dbAsyncDelete(c->db, c->argv[1]) :
                       dbSyncDelete(c->db, c->argv[1]);
         serverAssert(deleted);
@@ -394,12 +479,15 @@ void getexCommand(client *c) {
         setExpire(c,c->db,c->argv[1],milliseconds);
         /* Propagate as PXEXPIREAT millisecond-timestamp if there is
          * EX/PX/EXAT/PXAT flag and the key has not expired. */
+        /* 如果有 EX/PX/EXAT/PXAT 标志且 key 未过期，
+         * 则作为 pexpireat 毫秒时间戳进行传播 */
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
         rewriteClientCommandVector(c,3,shared.pexpireat,c->argv[1],milliseconds_obj);
         decrRefCount(milliseconds_obj);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",c->argv[1],c->db->id);
         server.dirty++;
+        /* 带 PERSIST 参数，则执行删除该 key 过期时间的操作 */
     } else if (flags & OBJ_PERSIST) {
         if (removeExpire(c->db, c->argv[1])) {
             signalModifiedKey(c, c->db, c->argv[1]);
