@@ -109,7 +109,7 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* Max % of CPU to use. */
 #define ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE 10 /* % of stale keys after which
                                                    we do extra efforts. */
-
+//这里会去执行主动的过期检查
 void activeExpireCycle(int type) {
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
@@ -127,12 +127,15 @@ void activeExpireCycle(int type) {
 
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
+    // 静态变量，用来累积函数连续执行时的数据
     static unsigned int current_db = 0; /* Next DB to test. */
     static int timelimit_exit = 0;      /* Time limit hit in previous call? */
     static long long last_fast_cycle = 0; /* When last fast cycle ran. */
 
     int j, iteration = 0;
+    //默认每次处理的数据库数量
     int dbs_per_call = CRON_DBS_PER_CALL;
+    // 函数开始的时间
     long long start = ustime(), timelimit, elapsed;
 
     /* When clients are paused the dataset should be static not just from the
@@ -187,11 +190,11 @@ void activeExpireCycle(int type) {
     serverAssert(server.also_propagate.numops == 0);
     server.core_propagates = 1;
     server.propagate_no_multi = 1;
-
+    //遍历数据库
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
         /* Expired and checked in a single loop. */
         unsigned long expired, sampled;
-
+        // 指向要处理的数据库
         redisDb *db = server.db+(current_db % server.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
@@ -210,11 +213,14 @@ void activeExpireCycle(int type) {
             iteration++;
 
             /* If there is nothing to expire try next DB ASAP. */
+            //获取数据库中带过期时间的键的数量 如果该数量为 0 ，直接跳过这个数据库
             if ((num = dictSize(db->expires)) == 0) {
                 db->avg_ttl = 0;
                 break;
             }
+            //获取数据库中键值对的数量
             slots = dictSlots(db->expires);
+            // 当前时间
             now = mstime();
 
             /* When there are less than 1% filled slots, sampling the key
@@ -229,7 +235,7 @@ void activeExpireCycle(int type) {
             sampled = 0;
             ttl_sum = 0;
             ttl_samples = 0;
-
+            // 每次最多只能检查 LOOKUPS_PER_LOOP 个键
             if (num > config_keys_per_loop)
                 num = config_keys_per_loop;
 

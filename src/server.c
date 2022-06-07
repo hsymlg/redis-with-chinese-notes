@@ -1512,6 +1512,7 @@ extern int ProcessingEventsWhileBlocked;
  * The most important is freeClientsInAsyncFreeQueue but we also
  * call some other low-risk functions. */
 //ae.c中的eventLoop->beforesleep(eventLoop);
+//执行eventLoop的事件处理前要执行的函数
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
@@ -1556,6 +1557,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
+    //执行一次快速的主动过期检查
     if (server.active_expire_enabled && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
