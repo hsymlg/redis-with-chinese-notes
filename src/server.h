@@ -843,12 +843,17 @@ typedef struct RedisModuleDigest {
 #define OBJ_STATIC_REFCOUNT (INT_MAX-1) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 typedef struct redisObject {
+    //对象的数据类型，字符串对象应该为 OBJ_STRING
     unsigned type:4;
+    //对象的编码类型，分别为OBJ_STRING、OBJ_ENCODING_INT或OBJ_ENCODING_EMBSTR
     unsigned encoding:4;
+    //LRU_BITS为24位，最近一次的访问时间
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
+    //引用计数
     int refcount;
+    //指向底层数据实现的指针
     void *ptr;
 } robj;
 
