@@ -55,20 +55,26 @@
  * Note that even when dict_can_resize is set to 0, not all resizes are
  * prevented: a hash table is still allowed to grow if the ratio between
  * the number of elements and the buckets > dict_force_resize_ratio. */
+//在需要时使用dictEnableResize() / dictDisableResize()使得字典可以调节size，这对于redis很重要，
+//当有一个子进程在save操作时，我们使用copy-on-write,不想移动过多内存
+//dict_can_resize=0不能阻止字典resize，当used-buckets>dict_force_resize_ratio时 依然可以resize
 static int dict_can_resize = 1;
 static unsigned int dict_force_resize_ratio = 5;
 
 /* -------------------------- private prototypes ---------------------------- */
-
+//在需要时扩展字典
 static int _dictExpandIfNeeded(dict *d);
+//计算次幂数
 static signed char _dictNextExp(unsigned long size);
+//返回字典中key的桶index，如果存在填充exsiting
 static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing);
+//初始化字典
 static int _dictInit(dict *d, dictType *type);
 
 /* -------------------------- hash functions -------------------------------- */
 
 static uint8_t dict_hash_function_seed[16];
-
+//hash种子，用于hash函数计算
 void dictSetHashFunctionSeed(uint8_t *seed) {
     memcpy(dict_hash_function_seed,seed,sizeof(dict_hash_function_seed));
 }
@@ -79,7 +85,7 @@ uint8_t *dictGetHashFunctionSeed(void) {
 
 /* The default hashing function uses SipHash implementation
  * in siphash.c. */
-
+//hash映射默认实现在siphash.c中 采用的是简单的hash算法 分为区分大小写和忽略大小写
 uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
 uint64_t siphash_nocase(const uint8_t *in, const size_t inlen, const uint8_t *k);
 
@@ -105,7 +111,7 @@ static void _dictReset(dict *d, int htidx)
 dict *dictCreate(dictType *type)
 {
     dict *d = zmalloc(sizeof(*d));
-
+    //调用私有方法
     _dictInit(d,type);
     return d;
 }
@@ -113,24 +119,32 @@ dict *dictCreate(dictType *type)
 /* Initialize the hash table */
 int _dictInit(dict *d, dictType *type)
 {
+    //初始化变量
     _dictReset(d, 0);
     _dictReset(d, 1);
     d->type = type;
+    //是否重构过
     d->rehashidx = -1;
+    //迭代器个数0
     d->pauserehash = 0;
     return DICT_OK;
 }
 
 /* Resize the table to the minimal size that contains all the elements,
  * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
+//调整表size到最小容纳所有的元素
+//used/buckets接近1小于1
 int dictResize(dict *d)
 {
     unsigned long minimal;
-
+    //如果不能resiaze或者正在重构散列
     if (!dict_can_resize || dictIsRehashing(d)) return DICT_ERR;
+    //使得minimal等于已经添加的键值对数目
     minimal = d->ht_used[0];
     if (minimal < DICT_HT_INITIAL_SIZE)
+        //确保最小size为4
         minimal = DICT_HT_INITIAL_SIZE;
+    //创建新的字典
     return dictExpand(d, minimal);
 }
 
@@ -143,6 +157,7 @@ int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
 
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
+    //如果正在rehash或者size变小了丢失数据返回失败
     if (dictIsRehashing(d) || d->ht_used[0] > size)
         return DICT_ERR;
 
